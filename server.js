@@ -19,19 +19,34 @@ const corsOptions = {
     const allowedOrigins = [
       'http://localhost:8000',
       'http://localhost:4200',
-      process.env.CORS_ORIGIN
+      process.env.CORS_ORIGIN,
+      process.env.FRONTEND_URL
     ].filter(Boolean);
     
     // En développement, autoriser toutes les origines locales
     if (!origin || allowedOrigins.includes(origin) || origin.startsWith('http://localhost:')) {
       callback(null, true);
-    } else {
+    } 
+    // Autoriser les domaines Vercel (production)
+    else if (origin && origin.includes('vercel.app')) {
+      callback(null, true);
+    }
+    // Autoriser les domaines Netlify (production)
+    else if (origin && origin.includes('netlify.app')) {
+      callback(null, true);
+    }
+    // Autoriser les domaines Render (production)
+    else if (origin && origin.includes('onrender.com')) {
+      callback(null, true);
+    }
+    else {
+      console.log('CORS bloqué pour:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie'],
   exposedHeaders: ['Set-Cookie']
 };
 
@@ -40,10 +55,23 @@ app.use(cors(corsOptions));
 // Répondre aux préflights sans router (compatible Express 5)
 app.use((req, res, next) => {
   if (req.method === 'OPTIONS') {
-    res.header('Access-Control-Allow-Origin', req.headers.origin || 'http://localhost:8000');
+    const origin = req.headers.origin;
+    // Autoriser l'origine si elle est valide
+    if (origin && (
+      origin.startsWith('http://localhost:') ||
+      origin.includes('vercel.app') ||
+      origin.includes('netlify.app') ||
+      origin.includes('onrender.com') ||
+      origin === process.env.CORS_ORIGIN ||
+      origin === process.env.FRONTEND_URL
+    )) {
+      res.header('Access-Control-Allow-Origin', origin);
+    } else {
+      res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    }
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,PATCH');
-    res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+    res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Cookie');
     return res.sendStatus(204);
   }
   next();
