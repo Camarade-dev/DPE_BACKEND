@@ -13,23 +13,50 @@ app.use(cookieParser());
 
 app.use(morgan("dev"));
 
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:8000',
+// Configuration CORS améliorée
+const corsOptions = {
+  origin: function (origin, callback) {
+    const allowedOrigins = [
+      'http://localhost:8000',
+      'http://localhost:4200',
+      process.env.CORS_ORIGIN
+    ].filter(Boolean);
+    
+    // En développement, autoriser toutes les origines locales
+    if (!origin || allowedOrigins.includes(origin) || origin.startsWith('http://localhost:')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization']
-}));
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Set-Cookie']
+};
+
+app.use(cors(corsOptions));
 
 // Répondre aux préflights sans router (compatible Express 5)
 app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  if (req.method === 'OPTIONS') {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || 'http://localhost:8000');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,PATCH');
+    res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+    return res.sendStatus(204);
+  }
   next();
 });
 import authRoutes from "./routes/auth.js";
 import formRoutes from "./routes/forms.js";
+import lidarRoutes from "./routes/lidar.js";
+import lidarPublicRoutes from "./routes/lidar-public.js";
 
 app.use("/api/auth", authRoutes);
 app.use("/api/forms", formRoutes);
+app.use("/api/lidar", lidarRoutes);
+app.use("/api/lidar-public", lidarPublicRoutes);
 
 // Exemple de route test
 app.get("/api/test", (req, res) => {
