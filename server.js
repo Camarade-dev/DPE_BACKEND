@@ -52,11 +52,12 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Répondre aux préflights sans router (compatible Express 5)
+// Middleware pour ajouter les headers CORS à toutes les réponses (même en cas d'erreur)
 app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') {
-    const origin = req.headers.origin;
-    // Autoriser l'origine si elle est valide
+  const origin = req.headers.origin;
+  
+  // Fonction pour définir les headers CORS
+  const setCorsHeaders = () => {
     if (origin && (
       origin.startsWith('http://localhost:') ||
       origin.includes('vercel.app') ||
@@ -66,14 +67,36 @@ app.use((req, res, next) => {
       origin === process.env.FRONTEND_URL
     )) {
       res.header('Access-Control-Allow-Origin', origin);
-    } else {
-      res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    } else if (origin) {
+      res.header('Access-Control-Allow-Origin', origin);
     }
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,PATCH');
     res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Cookie');
+  };
+  
+  // Répondre aux préflights
+  if (req.method === 'OPTIONS') {
+    setCorsHeaders();
     return res.sendStatus(204);
   }
+  
+  // Ajouter les headers CORS à toutes les réponses
+  setCorsHeaders();
+  
+  // Intercepter les erreurs pour s'assurer que les headers CORS sont toujours présents
+  const originalSend = res.send;
+  res.send = function(data) {
+    setCorsHeaders();
+    return originalSend.call(this, data);
+  };
+  
+  const originalJson = res.json;
+  res.json = function(data) {
+    setCorsHeaders();
+    return originalJson.call(this, data);
+  };
+  
   next();
 });
 import authRoutes from "./routes/auth.js";
@@ -91,10 +114,22 @@ app.get("/api/test", (req, res) => {
   res.json({ ok: true, message: "API opérationnelle 🚀" });
 });
 
-// Connexion à MongoDB
-mongoose.connect(process.env.MONGO_URI)
+// Connexion à MongoDB avec options améliorées
+const mongooseOptions = {
+  serverSelectionTimeoutMS: 5000, // Timeout de 5 secondes au lieu de 10
+  socketTimeoutMS: 45000,
+  connectTimeoutMS: 10000,
+  retryWrites: true,
+  w: 'majority'
+};
+
+mongoose.connect(process.env.MONGO_URI, mongooseOptions)
   .then(() => console.log("✅ Connecté à MongoDB"))
-  .catch(err => console.error("Erreur MongoDB:", err));
+  .catch(err => {
+    console.error("❌ Erreur MongoDB:", err.message);
+    console.error("💡 Vérifiez que l'IP de Render est whitelistée dans MongoDB Atlas");
+    console.error("💡 Dans MongoDB Atlas, allez dans Network Access et ajoutez 0.0.0.0/0 (toutes les IPs)");
+  });
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log("✅ API en écoute sur port", port));

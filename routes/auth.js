@@ -12,8 +12,9 @@ router.post("/login", async (req, res) => {
   const { login, password } = req.body || {};
   if (!login || !password) return res.status(400).json({ ok:false, error:"Champs manquants" });
 
-  const user = await User.findOne({ login });
-  if (!user) return res.status(401).json({ ok:false, error:"Utilisateur inconnu" });
+  try {
+    const user = await User.findOne({ login });
+    if (!user) return res.status(401).json({ ok:false, error:"Utilisateur inconnu" });
 
   const valid = bcrypt.compareSync(password, user.passHash);
   if (!valid) return res.status(401).json({ ok:false, error:"Mot de passe incorrect" });
@@ -24,19 +25,32 @@ router.post("/login", async (req, res) => {
     { expiresIn: "7d" }
   );
 
-  res.cookie(process.env.COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: false, // en dev (HTTP)
-    path: "/"
-  });
+    // Configuration des cookies pour la production (HTTPS) et développement (HTTP)
+    const isProduction = process.env.NODE_ENV === 'production' || process.env.PORT;
+    const cookieOptions = {
+      httpOnly: true,
+      path: "/",
+      sameSite: isProduction ? "none" : "lax", // "none" requis pour cross-origin en HTTPS
+      secure: isProduction, // true en production (HTTPS), false en dev (HTTP)
+    };
+    
+    res.cookie(process.env.COOKIE_NAME || 'auth_token', token, cookieOptions);
 
-  res.json({ ok: true, data: { pseudo: user.pseudo } });
+    res.json({ ok: true, data: { pseudo: user.pseudo } });
+  } catch (error) {
+    console.error("[AUTH] Erreur lors du login:", error);
+    res.status(500).json({ ok: false, error: "Erreur serveur lors de la connexion" });
+  }
 });
 
 // POST /api/auth/logout (publique : on peut clear le cookie même sans token)
 router.post("/logout", (req, res) => {
-  res.clearCookie(process.env.COOKIE_NAME, { path: "/" });
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.PORT;
+  res.clearCookie(process.env.COOKIE_NAME || 'auth_token', { 
+    path: "/",
+    sameSite: isProduction ? "none" : "lax",
+    secure: isProduction
+  });
   res.json({ ok:true });
 });
 
@@ -75,12 +89,16 @@ router.post("/register", async (req, res) => {
     { expiresIn: "7d" }
   );
 
-  res.cookie(process.env.COOKIE_NAME, token, {
+  // Configuration des cookies pour cross-origin (production HTTPS)
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.PORT;
+  const cookieOptions = {
     httpOnly: true,
-    sameSite: "lax",
-    secure: false,
-    path: "/"
-  });
+    path: "/",
+    sameSite: isProduction ? "none" : "lax", // "none" requis pour cross-origin en HTTPS
+    secure: isProduction, // true en production (HTTPS), false en dev (HTTP)
+  };
+  
+  res.cookie(process.env.COOKIE_NAME || 'auth_token', token, cookieOptions);
 
   res.json({ ok:true, data:{ pseudo:user.pseudo } });
 });
