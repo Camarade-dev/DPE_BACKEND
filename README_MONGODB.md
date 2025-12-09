@@ -24,7 +24,7 @@
    COOKIE_NAME=dpe_token
    CORS_ORIGIN=http://localhost:8000
    PORT=3000
-   PYTHON_API_URL=http://localhost:8001
+   PYTHON_API_URL=http://localhost:8001  # En production: https://greendiag-site-vercel.onrender.com
    ```
 
 ## Option 2 : MongoDB Atlas (Cloud - Gratuit)
@@ -76,6 +76,7 @@ Vous devriez voir :
 **"ENOTFOUND"** :
 - L'URL MongoDB Atlas est incorrecte ou le cluster n'existe plus
 - Vérifier que l'IP est autorisée dans MongoDB Atlas
+
 
 
 

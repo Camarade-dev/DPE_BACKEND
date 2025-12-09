@@ -46,3 +46,4 @@ Si vous avez encore des erreurs CORS :
 3. Vérifiez que `credentials: true` est bien configuré côté frontend
 4. Vérifiez que les cookies sont bien envoyés avec `withCredentials: true`
 
+
