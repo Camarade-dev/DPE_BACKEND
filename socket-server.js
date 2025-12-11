@@ -183,30 +183,48 @@ export function initSocketServer(httpServer, corsOptions) {
             measurement.totalPoints = measurement.points.length;
           }
         } else {
-          // Créer une nouvelle mesure
-          if (!rawData || !rawData.trim()) {
-            socket.emit("error", { message: "Données brutes requises pour créer une nouvelle mesure" });
-            return;
-          }
-          
-          const points = convertTo3DPoints(rawData);
-          
-          if (points.length === 0) {
-            socket.emit("error", { message: "Aucun point valide trouvé dans les données" });
-            return;
-          }
-          
-          measurement = await LidarMeasurement.create({
+          // Vérifier s'il existe déjà une mesure en cours pour cet utilisateur
+          measurement = await LidarMeasurement.findOne({
             userId: resolvedUserId,
-            formId: formId || null,
-            robotIp: robotIp || socket.handshake.address,
-            totalPoints: points.length,
-            points: points,
             status: 'collecting'
-          });
+          }).sort({ createdAt: -1 });
           
-          // Envoyer l'ID de la mesure au robot
-          socket.emit("measurement_created", { measurementId: measurement._id });
+          if (!measurement) {
+            // Créer une nouvelle mesure seulement si aucune mesure en cours n'existe
+            if (!rawData || !rawData.trim()) {
+              socket.emit("error", { message: "Données brutes requises pour créer une nouvelle mesure" });
+              return;
+            }
+            
+            const points = convertTo3DPoints(rawData);
+            
+            if (points.length === 0) {
+              socket.emit("error", { message: "Aucun point valide trouvé dans les données" });
+              return;
+            }
+            
+            measurement = await LidarMeasurement.create({
+              userId: resolvedUserId,
+              formId: formId || null,
+              robotIp: robotIp || socket.handshake.address,
+              totalPoints: points.length,
+              points: points,
+              status: 'collecting'
+            });
+            
+            // Envoyer l'ID de la mesure au robot
+            socket.emit("measurement_created", { measurementId: measurement._id });
+            console.log(`📝 Nouvelle mesure créée: ${measurement._id} pour userId ${resolvedUserId}`);
+          } else {
+            // Utiliser la mesure existante et ajouter les nouveaux points
+            if (rawData && rawData.trim()) {
+              const newPoints = convertTo3DPoints(rawData);
+              measurement.points.push(...newPoints);
+              measurement.totalPoints = measurement.points.length;
+            }
+            // Envoyer l'ID de la mesure existante au robot (au cas où il ne l'aurait pas)
+            socket.emit("measurement_created", { measurementId: measurement._id });
+          }
         }
         
         // Si c'est le dernier paquet, calculer les stats et finaliser
