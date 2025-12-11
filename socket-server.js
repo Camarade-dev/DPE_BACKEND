@@ -1,7 +1,9 @@
 // socket-server.js
 // Serveur Socket.io pour le temps réel LiDAR
 import { Server } from "socket.io";
+import mongoose from "mongoose";
 import LidarMeasurement from "./models/LidarMeasurement.js";
+import User from "./models/User.js";
 
 // Fonctions utilitaires (réutilisées depuis lidar-public.js)
 function convertTo3DPoints(rawData) {
@@ -67,6 +69,42 @@ function calculateStats(points) {
 }
 
 /**
+ * Résout le userId en ObjectId valide
+ * Si userId n'est pas un ObjectId, cherche l'utilisateur par login ou pseudo
+ */
+async function resolveUserId(userId) {
+  if (!userId) {
+    return null;
+  }
+
+  // Vérifier si c'est déjà un ObjectId valide
+  if (mongoose.Types.ObjectId.isValid(userId)) {
+    return new mongoose.Types.ObjectId(userId);
+  }
+
+  // Sinon, chercher l'utilisateur par login ou pseudo
+  try {
+    const user = await User.findOne({
+      $or: [
+        { login: userId },
+        { pseudo: userId }
+      ]
+    });
+
+    if (user) {
+      return user._id;
+    }
+
+    // Si aucun utilisateur trouvé, retourner null
+    console.warn(`⚠️  Utilisateur non trouvé pour: ${userId}`);
+    return null;
+  } catch (error) {
+    console.error(`❌ Erreur lors de la recherche de l'utilisateur ${userId}:`, error);
+    return null;
+  }
+}
+
+/**
  * Initialise le serveur Socket.io
  */
 export function initSocketServer(httpServer, corsOptions) {
@@ -84,14 +122,24 @@ export function initSocketServer(httpServer, corsOptions) {
     // Connexion du robot
     socket.on("robot:connect", async (data) => {
       const { userId, formId, robotIp } = data;
-      console.log(`🤖 Robot connecté: ${robotIp} pour userId ${userId}`);
       
-      // Associer le socket au userId
-      socket.userId = userId;
+      // Résoudre le userId en ObjectId valide
+      const resolvedUserId = await resolveUserId(userId);
+      if (!resolvedUserId) {
+        socket.emit("error", { 
+          message: `Utilisateur non trouvé: ${userId}. Vérifiez que le login/pseudo existe dans la base de données.` 
+        });
+        return;
+      }
+      
+      console.log(`🤖 Robot connecté: ${robotIp} pour userId ${resolvedUserId} (${userId})`);
+      
+      // Associer le socket au userId résolu
+      socket.userId = resolvedUserId.toString();
       socket.robotIp = robotIp;
       socket.formId = formId;
       
-      socket.emit("connected", { ok: true });
+      socket.emit("connected", { ok: true, userId: resolvedUserId.toString() });
     });
 
     // Réception des données LiDAR du robot
@@ -104,13 +152,22 @@ export function initSocketServer(httpServer, corsOptions) {
           return;
         }
 
+        // Résoudre le userId en ObjectId valide
+        const resolvedUserId = await resolveUserId(userId);
+        if (!resolvedUserId) {
+          socket.emit("error", { 
+            message: `Utilisateur non trouvé: ${userId}. Vérifiez que le login/pseudo existe dans la base de données.` 
+          });
+          return;
+        }
+
         let measurement;
 
         if (measurementId) {
           // Continuer une mesure existante
           measurement = await LidarMeasurement.findOne({
             _id: measurementId,
-            userId: userId,
+            userId: resolvedUserId,
             status: 'collecting'
           });
           
@@ -140,7 +197,7 @@ export function initSocketServer(httpServer, corsOptions) {
           }
           
           measurement = await LidarMeasurement.create({
-            userId: userId,
+            userId: resolvedUserId,
             formId: formId || null,
             robotIp: robotIp || socket.handshake.address,
             totalPoints: points.length,
@@ -156,7 +213,7 @@ export function initSocketServer(httpServer, corsOptions) {
         if (isLast) {
           measurement.stats = calculateStats(measurement.points);
           measurement.status = 'completed';
-          console.log(`✅ Mesure LIDAR finalisée: ${measurement.totalPoints} points pour userId ${userId}`);
+          console.log(`✅ Mesure LIDAR finalisée: ${measurement.totalPoints} points pour userId ${resolvedUserId} (${userId})`);
         }
         
         await measurement.save();
@@ -164,7 +221,7 @@ export function initSocketServer(httpServer, corsOptions) {
         // Diffuser la mise à jour à tous les clients frontend connectés (même userId)
         io.emit("lidar:update", {
           measurementId: measurement._id.toString(),
-          userId: userId,
+          userId: resolvedUserId.toString(),
           totalPoints: measurement.totalPoints,
           status: measurement.status,
           stats: measurement.stats
