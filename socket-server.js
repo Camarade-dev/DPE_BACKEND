@@ -146,7 +146,7 @@ export function initSocketServer(httpServer, corsOptions) {
     socket.on("lidar:data", async (data) => {
       try {
         const { rawData, userId, formId, robotIp, isLast, measurementId } = data;
-        
+        console.log("🔄 Données LiDAR reçues:", data);
         if (!userId) {
           socket.emit("error", { message: "userId requis" });
           return;
