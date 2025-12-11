@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 
-const router = Router();
+const router = Router(); 
 
 // POST /api/auth/login (publique)
 router.post("/login", async (req, res) => {

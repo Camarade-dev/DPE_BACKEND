@@ -4,9 +4,12 @@ import dotenv from "dotenv";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import morgan from "morgan";
+import { createServer } from "http";
+import { initSocketServer } from "./socket-server.js";
 
 dotenv.config();
 const app = express();
+const httpServer = createServer(app);
 
 app.use(express.json());
 app.use(cookieParser());
@@ -131,5 +134,11 @@ mongoose.connect(process.env.MONGO_URI, mongooseOptions)
     console.error("💡 Dans MongoDB Atlas, allez dans Network Access et ajoutez 0.0.0.0/0 (toutes les IPs)");
   });
 
+// Initialiser Socket.io
+const io = initSocketServer(httpServer, corsOptions);
+
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log("✅ API en écoute sur port", port));
+httpServer.listen(port, () => {
+  console.log("✅ API en écoute sur port", port);
+  console.log("✅ Socket.io activé pour le temps réel");
+});

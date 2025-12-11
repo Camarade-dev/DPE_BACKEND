@@ -1,145 +1,196 @@
 // socket-server.js
-// Serveur socket TCP pour recevoir les données du robot LIDAR
-import net from "net";
-import http from "http";
-import dotenv from "dotenv";
+// Serveur Socket.io pour le temps réel LiDAR
+import { Server } from "socket.io";
+import LidarMeasurement from "./models/LidarMeasurement.js";
 
-dotenv.config();
-
-const SOCKET_PORT = process.env.LIDAR_SOCKET_PORT || 65432;
-const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3000";
-
-/**
- * Envoie les données au backend via HTTP
- */
-async function sendToBackend(rawData, robotIp, userId, formId = null, measurementId = null) {
-  try {
-    const url = `${BACKEND_URL}/api/lidar-public/stream`;
-    
-    const payload = {
-      rawData: rawData,
-      robotIp: robotIp,
-      userId: userId,
-      formId: formId,
-      isLast: false
-    };
-    
-    if (measurementId) {
-      payload.measurementId = measurementId;
-    }
-    
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Erreur envoi au backend:", errorText);
-      return null;
-    }
-    
-    const result = await response.json();
-    return result.data?.measurementId;
-  } catch (error) {
-    console.error("Erreur lors de l'envoi au backend:", error);
-    return null;
-  }
-}
-
-/**
- * Finalise une mesure dans le backend
- */
-async function finalizeMeasurement(measurementId, robotIp, userId) {
-  try {
-    const url = `${BACKEND_URL}/api/lidar-public/stream`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        rawData: "", // Données vides pour finaliser
-        measurementId: measurementId,
-        robotIp: robotIp,
-        userId: userId,
-        isLast: true
-      })
-    });
-    
-    return response.ok;
-  } catch (error) {
-    console.error("Erreur lors de la finalisation:", error);
-    return false;
-  }
-}
-
-// Créer le serveur socket TCP
-const server = net.createServer((socket) => {
-  console.log(`✅ Client connecté: ${socket.remoteAddress}:${socket.remotePort}`);
+// Fonctions utilitaires (réutilisées depuis lidar-public.js)
+function convertTo3DPoints(rawData) {
+  const points = [];
+  const lines = rawData.split(";").filter(line => line.trim());
   
-  let measurementId = null;
-  let buffer = "";
-  let packetCount = 0;
-  const robotIp = socket.remoteAddress;
-  // TODO: Récupérer le userId depuis la connexion (première ligne envoyée par le robot)
-  // Pour l'instant, utiliser un userId par défaut ou depuis les variables d'env
-  const userId = process.env.ROBOT_USER_ID || "default";
-  
-  socket.on("data", async (data) => {
+  for (const line of lines) {
     try {
-      buffer += data.toString("utf-8");
+      const [angle, dist, inten, anglemot] = line.split(",").map(parseFloat);
       
-      // Traiter les paquets complets (séparés par ";")
-      const packets = buffer.split(";");
-      buffer = packets.pop() || ""; // Garder le dernier paquet incomplet dans le buffer
-      
-      for (const packet of packets) {
-        if (packet.trim()) {
-          packetCount++;
-          
-          // Envoyer au backend
-          if (!measurementId) {
-            const result = await sendToBackend(packet, robotIp, userId);
-            if (result) {
-              measurementId = result;
-            }
-          } else {
-            await sendToBackend(packet, robotIp, userId, null, measurementId);
-          }
-          
-          // Log tous les 100 paquets
-          if (packetCount % 100 === 0) {
-            console.log(`📦 ${packetCount} paquets reçus de ${robotIp}`);
-          }
-        }
+      if (inten >= 0 && dist > 0 && dist < 12000) {
+        const angleRad = (angle * Math.PI) / 180;
+        const motorRad = (anglemot * Math.PI) / 180;
+        
+        const z = -dist * Math.sin(angleRad);
+        const y = dist * Math.cos(angleRad) * Math.sin(motorRad);
+        const x = dist * Math.cos(angleRad) * Math.cos(motorRad);
+        
+        points.push({
+          x: x / 1000, // Convertir mm en mètres
+          y: y / 1000,
+          z: z / 1000,
+          intensity: inten,
+          angle: angle,
+          distance: dist,
+          motorAngle: anglemot
+        });
       }
-    } catch (error) {
-      console.error("Erreur lors du traitement des données:", error);
+    } catch (err) {
+      console.error("Erreur parsing point:", line, err);
     }
-  });
+  }
   
-  socket.on("end", async () => {
-    console.log(`🔌 Client déconnecté: ${socket.remoteAddress}`);
-    
-    // Finaliser la mesure si elle existe
-    if (measurementId) {
-      console.log(`✅ Finalisation de la mesure ${measurementId}`);
-      await finalizeMeasurement(measurementId, robotIp, userId);
-      console.log(`✅ Mesure finalisée: ${packetCount} paquets reçus`);
-    }
-  });
+  return points;
+}
+
+function calculateStats(points) {
+  if (points.length === 0) {
+    return {
+      minX: 0, maxX: 0,
+      minY: 0, maxY: 0,
+      minZ: 0, maxZ: 0,
+      avgIntensity: 0,
+      pointDensity: 0
+    };
+  }
   
-  socket.on("error", (error) => {
-    console.error(`❌ Erreur socket: ${error.message}`);
+  const xs = points.map(p => p.x);
+  const ys = points.map(p => p.y);
+  const zs = points.map(p => p.z);
+  const intensities = points.map(p => p.intensity);
+  
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+    minZ: Math.min(...zs),
+    maxZ: Math.max(...zs),
+    avgIntensity: intensities.reduce((a, b) => a + b, 0) / intensities.length,
+    pointDensity: points.length
+  };
+}
+
+/**
+ * Initialise le serveur Socket.io
+ */
+export function initSocketServer(httpServer, corsOptions) {
+  const io = new Server(httpServer, {
+    cors: corsOptions,
+    transports: ['websocket', 'polling']
   });
-});
 
-server.listen(SOCKET_PORT, "0.0.0.0", () => {
-  console.log(`✅ Serveur socket LIDAR en écoute sur le port ${SOCKET_PORT}`);
-  console.log(`📡 En attente de connexion du robot...`);
-});
+  // Stocker les mesures en cours par userId
+  const activeMeasurements = new Map();
 
-server.on("error", (error) => {
-  console.error(`❌ Erreur serveur socket: ${error.message}`);
-});
+  io.on("connection", (socket) => {
+    console.log(`✅ Client connecté: ${socket.id}`);
 
+    // Connexion du robot
+    socket.on("robot:connect", async (data) => {
+      const { userId, formId, robotIp } = data;
+      console.log(`🤖 Robot connecté: ${robotIp} pour userId ${userId}`);
+      
+      // Associer le socket au userId
+      socket.userId = userId;
+      socket.robotIp = robotIp;
+      socket.formId = formId;
+      
+      socket.emit("connected", { ok: true });
+    });
+
+    // Réception des données LiDAR du robot
+    socket.on("lidar:data", async (data) => {
+      try {
+        const { rawData, userId, formId, robotIp, isLast, measurementId } = data;
+        
+        if (!userId) {
+          socket.emit("error", { message: "userId requis" });
+          return;
+        }
+
+        let measurement;
+
+        if (measurementId) {
+          // Continuer une mesure existante
+          measurement = await LidarMeasurement.findOne({
+            _id: measurementId,
+            userId: userId,
+            status: 'collecting'
+          });
+          
+          if (!measurement) {
+            socket.emit("error", { message: "Mesure non trouvée ou déjà terminée" });
+            return;
+          }
+          
+          // Ajouter les nouveaux points
+          if (rawData && rawData.trim()) {
+            const newPoints = convertTo3DPoints(rawData);
+            measurement.points.push(...newPoints);
+            measurement.totalPoints = measurement.points.length;
+          }
+        } else {
+          // Créer une nouvelle mesure
+          if (!rawData || !rawData.trim()) {
+            socket.emit("error", { message: "Données brutes requises pour créer une nouvelle mesure" });
+            return;
+          }
+          
+          const points = convertTo3DPoints(rawData);
+          
+          if (points.length === 0) {
+            socket.emit("error", { message: "Aucun point valide trouvé dans les données" });
+            return;
+          }
+          
+          measurement = await LidarMeasurement.create({
+            userId: userId,
+            formId: formId || null,
+            robotIp: robotIp || socket.handshake.address,
+            totalPoints: points.length,
+            points: points,
+            status: 'collecting'
+          });
+          
+          // Envoyer l'ID de la mesure au robot
+          socket.emit("measurement_created", { measurementId: measurement._id });
+        }
+        
+        // Si c'est le dernier paquet, calculer les stats et finaliser
+        if (isLast) {
+          measurement.stats = calculateStats(measurement.points);
+          measurement.status = 'completed';
+          console.log(`✅ Mesure LIDAR finalisée: ${measurement.totalPoints} points pour userId ${userId}`);
+        }
+        
+        await measurement.save();
+        
+        // Diffuser la mise à jour à tous les clients frontend connectés (même userId)
+        io.emit("lidar:update", {
+          measurementId: measurement._id.toString(),
+          userId: userId,
+          totalPoints: measurement.totalPoints,
+          status: measurement.status,
+          stats: measurement.stats
+        });
+        
+        // Confirmation au robot
+        socket.emit("lidar:ack", {
+          ok: true,
+          measurementId: measurement._id.toString(),
+          totalPoints: measurement.totalPoints
+        });
+        
+      } catch (error) {
+        console.error("Erreur lors du traitement des données LiDAR:", error);
+        socket.emit("error", { message: "Erreur serveur lors du traitement" });
+      }
+    });
+
+    // Déconnexion
+    socket.on("disconnect", () => {
+      console.log(`❌ Client déconnecté: ${socket.id}`);
+      if (socket.userId) {
+        activeMeasurements.delete(socket.userId);
+      }
+    });
+  });
+
+  return io;
+}
