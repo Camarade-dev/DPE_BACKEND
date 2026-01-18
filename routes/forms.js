@@ -67,6 +67,12 @@ async function generateRAGResponse(form, userId) {
   console.log("🔄 Génération RAG nécessaire pour userId:", userId);
   const ragApiUrl = process.env.RAG_API_URL || "http://localhost:8002";
   
+  // Vérifier si l'URL de l'API RAG est configurée
+  if (!process.env.RAG_API_URL && ragApiUrl.includes("localhost")) {
+    console.warn("⚠️  RAG_API_URL non configurée, utilisation de localhost (ne fonctionnera pas sur Render)");
+    console.warn("💡 Pour déployer sur Render, configurez la variable RAG_API_URL dans les variables d'environnement");
+  }
+  
   // Construire une question personnalisée basée sur le DPE
   const classeDpe = form.dpeResults.classe_dpe_finale || "inconnue";
   const etiquetteEnergie = form.dpeResults.etiquette_energie || "inconnue";
@@ -76,23 +82,34 @@ Quels sont les travaux de rénovation énergétique les plus prioritaires et eff
 Donne-moi des conseils concrets et personnalisés.`;
 
   try {
+    console.log(`📡 Appel de l'API RAG à ${ragApiUrl}/query`);
     const response = await fetch(`${ragApiUrl}/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         question: question,
         dpe_results: form.dpeResults
-      })
+      }),
+      // Timeout pour éviter que ça bloque trop longtemps
+      signal: AbortSignal.timeout(60000) // 60 secondes
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Erreur API RAG (HTTP):", response.status, errorText);
+      console.error("❌ Erreur API RAG (HTTP):", response.status, errorText);
+      console.error("   URL appelée:", `${ragApiUrl}/query`);
+      
+      // Message d'erreur plus explicite
+      if (response.status === 503) {
+        throw new Error(`L'API RAG n'est pas disponible (service non initialisé). Vérifiez que l'API RAG est démarrée sur ${ragApiUrl}`);
+      } else if (response.status === 0 || response.status >= 500) {
+        throw new Error(`Impossible de contacter l'API RAG à ${ragApiUrl}. Vérifiez que l'API est déployée et que RAG_API_URL est correctement configurée.`);
+      }
       throw new Error(`Erreur API RAG: ${response.status} - ${errorText}`);
     }
 
     const ragResult = await response.json();
-    console.log("Réponse API RAG:", JSON.stringify(ragResult, null, 2));
+    console.log("✅ Réponse API RAG reçue");
     
     if (ragResult.ok && ragResult.data && ragResult.data.response) {
       form.ragResponse = ragResult.data.response;
@@ -111,9 +128,26 @@ Donne-moi des conseils concrets et personnalisés.`;
       throw new Error(`Réponse RAG invalide: ${JSON.stringify(ragResult)}`);
     }
   } catch (error) {
-    console.error("Erreur lors de l'appel RAG:", error);
-    // Sauvegarder l'erreur pour debug
-    form.ragResponse = `Erreur lors de la génération: ${error.message}`;
+    console.error("❌ Erreur lors de l'appel RAG:", error);
+    console.error("   Type d'erreur:", error.name);
+    console.error("   Message:", error.message);
+    
+    // Gérer les erreurs réseau spécifiques
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      const errorMsg = `Impossible de se connecter à l'API RAG (${ragApiUrl}). ` +
+        `Vérifiez que l'API RAG est démarrée et accessible. ` +
+        `Si vous êtes sur Render, assurez-vous que RAG_API_URL est configurée dans les variables d'environnement.`;
+      console.error("💡", errorMsg);
+      form.ragResponse = errorMsg;
+    } else if (error.name === 'AbortError') {
+      const errorMsg = `Timeout lors de l'appel à l'API RAG (60 secondes dépassées). ` +
+        `L'API RAG prend trop de temps à répondre.`;
+      console.error("💡", errorMsg);
+      form.ragResponse = errorMsg;
+    } else {
+      form.ragResponse = `Erreur lors de la génération RAG: ${error.message}`;
+    }
+    
     form.ragGenerated = false;
     await form.save();
     throw error;
