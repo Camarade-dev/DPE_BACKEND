@@ -32,7 +32,7 @@ function hashDPEResults(dpeResults) {
   return crypto.createHash('md5').update(dataString).digest('hex');
 }
 
-/**
+/** 
  * Génère une réponse RAG automatique basée sur les résultats du DPE
  */
 async function generateRAGResponse(form, userId) {
