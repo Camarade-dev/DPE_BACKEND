@@ -65,7 +65,7 @@ async function generateRAGResponse(form, userId) {
 
   // Pas de cache, générer la RAG
   console.log("🔄 Génération RAG nécessaire pour userId:", userId);
-  const ragApiUrl = process.env.RAG_API_URL || "http://localhost:8002";
+  const ragApiUrl = process.env.RAG_API_URL || "https://rag-dpe-1.onrender.com";
   
   // Vérifier si l'URL de l'API RAG est configurée
   if (!process.env.RAG_API_URL && ragApiUrl.includes("localhost")) {
