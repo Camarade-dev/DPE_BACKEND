@@ -81,18 +81,47 @@ async function generateRAGResponse(form, userId) {
 Quels sont les travaux de rénovation énergétique les plus prioritaires et efficaces pour améliorer mon DPE ? 
 Donne-moi des conseils concrets et personnalisés.`;
 
+  // Fonction helper pour appeler l'API RAG avec retry
+  const callRAGAPI = async (retries = 2) => {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        if (attempt > 0) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // Exponential backoff, max 5s
+          console.log(`🔄 Tentative ${attempt + 1}/${retries + 1} après ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        
+        console.log(`📡 Appel de l'API RAG à ${ragApiUrl}/query (tentative ${attempt + 1}/${retries + 1})`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes (600 secondes)
+        
+        try {
+          const response = await fetch(`${ragApiUrl}/query`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question: question,
+              dpe_results: form.dpeResults
+            }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          return response;
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          throw fetchError;
+        }
+      } catch (error) {
+        if (attempt === retries) {
+          throw error; // Dernière tentative, propager l'erreur
+        }
+        console.warn(`⚠️  Tentative ${attempt + 1} échouée:`, error.message);
+      }
+    }
+  };
+
   try {
-    console.log(`📡 Appel de l'API RAG à ${ragApiUrl}/query`);
-    const response = await fetch(`${ragApiUrl}/query`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question: question,
-        dpe_results: form.dpeResults
-      }),
-      // Timeout augmenté pour les requêtes RAG (peuvent prendre 2-3 minutes avec Hugging Face API)
-      signal: AbortSignal.timeout(180000) // 180 secondes (3 minutes)
-    });
+    const response = await callRAGAPI(2);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -140,8 +169,8 @@ Donne-moi des conseils concrets et personnalisés.`;
       console.error("💡", errorMsg);
       form.ragResponse = errorMsg;
     } else if (error.name === 'AbortError') {
-      const errorMsg = `Timeout lors de l'appel à l'API RAG (3 minutes dépassées). ` +
-        `L'API RAG prend trop de temps à répondre. Cela peut être dû au cold start de Hugging Face API.`;
+      const errorMsg = `Timeout lors de l'appel à l'API RAG (10 minutes dépassées). ` +
+        `L'API RAG prend trop de temps à répondre. Cela peut être dû au cold start de Hugging Face API ou à une surcharge.`;
       console.error("💡", errorMsg);
       form.ragResponse = errorMsg;
     } else {
