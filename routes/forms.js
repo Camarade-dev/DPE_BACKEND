@@ -90,8 +90,8 @@ Donne-moi des conseils concrets et personnalisés.`;
         question: question,
         dpe_results: form.dpeResults
       }),
-      // Timeout pour éviter que ça bloque trop longtemps
-      signal: AbortSignal.timeout(60000) // 60 secondes
+      // Timeout augmenté pour les requêtes RAG (peuvent prendre 2-3 minutes avec Hugging Face API)
+      signal: AbortSignal.timeout(180000) // 180 secondes (3 minutes)
     });
 
     if (!response.ok) {
@@ -140,8 +140,8 @@ Donne-moi des conseils concrets et personnalisés.`;
       console.error("💡", errorMsg);
       form.ragResponse = errorMsg;
     } else if (error.name === 'AbortError') {
-      const errorMsg = `Timeout lors de l'appel à l'API RAG (60 secondes dépassées). ` +
-        `L'API RAG prend trop de temps à répondre.`;
+      const errorMsg = `Timeout lors de l'appel à l'API RAG (3 minutes dépassées). ` +
+        `L'API RAG prend trop de temps à répondre. Cela peut être dû au cold start de Hugging Face API.`;
       console.error("💡", errorMsg);
       form.ragResponse = errorMsg;
     } else {
