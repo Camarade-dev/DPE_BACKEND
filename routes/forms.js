@@ -56,6 +56,11 @@ async function generateRAGResponse(form, userId) {
     // Copier la réponse RAG du cache
     form.ragResponse = cachedForm.ragResponse;
     form.ragSources = cachedForm.ragSources || [];
+    // IMPORTANT: Copier aussi ragPdfFilename si disponible dans le cache
+    if (cachedForm.ragPdfFilename) {
+      form.ragPdfFilename = cachedForm.ragPdfFilename;
+      console.log("✅ ragPdfFilename copié depuis le cache:", cachedForm.ragPdfFilename);
+    }
     form.ragGenerated = true;
     form.ragGeneratedAt = cachedForm.ragGeneratedAt || new Date();
     form.dpeResultsHash = dpeResultsHash;
