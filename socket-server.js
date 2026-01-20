@@ -47,7 +47,10 @@ function calculateStats(points) {
       minY: 0, maxY: 0,
       minZ: 0, maxZ: 0,
       avgIntensity: 0,
-      pointDensity: 0
+      pointDensity: 0,
+      minTemperature: null,
+      maxTemperature: null,
+      avgTemperature: null
     };
   }
   
@@ -55,8 +58,9 @@ function calculateStats(points) {
   const ys = points.map(p => p.y);
   const zs = points.map(p => p.z);
   const intensities = points.map(p => p.intensity);
+  const temperatures = points.map(p => p.temperature).filter(t => t !== undefined && t !== null);
   
-  return {
+  const stats = {
     minX: Math.min(...xs),
     maxX: Math.max(...xs),
     minY: Math.min(...ys),
@@ -66,6 +70,97 @@ function calculateStats(points) {
     avgIntensity: intensities.reduce((a, b) => a + b, 0) / intensities.length,
     pointDensity: points.length
   };
+  
+  if (temperatures.length > 0) {
+    stats.minTemperature = Math.min(...temperatures);
+    stats.maxTemperature = Math.max(...temperatures);
+    stats.avgTemperature = temperatures.reduce((a, b) => a + b, 0) / temperatures.length;
+  } else {
+    stats.minTemperature = null;
+    stats.maxTemperature = null;
+    stats.avgTemperature = null;
+  }
+  
+  return stats;
+}
+
+/**
+ * Effectue la fusion spatiale entre les points LIDAR et les images thermiques
+ * Inspiré du code Python fourni
+ */
+async function performThermalFusion(measurement) {
+  if (!measurement.thermalImages || measurement.thermalImages.length === 0) {
+    return;
+  }
+  
+  const fusion = measurement.thermalFusion || {
+    fovHorizontal: 44.0,
+    fovVertical: 35.0,
+    resolutionX: 80,
+    resolutionY: 62
+  };
+  
+  const FOV_H = fusion.fovHorizontal;
+  const FOV_V = fusion.fovVertical;
+  const RES_X = fusion.resolutionX;
+  const RES_Y = fusion.resolutionY;
+  const DX = FOV_H / RES_X;
+  const DY = FOV_V / RES_Y;
+  
+  // Pour chaque point LIDAR, chercher la température correspondante
+  let pointsWithTemp = 0;
+  
+  for (const point of measurement.points) {
+    const a_lidar = point.angle; // Angle vertical (élévation)
+    const m1_lidar = point.motorAngle; // Angle horizontal (azimut)
+    const temperatures = [];
+    
+    // Parcourir toutes les images thermiques
+    for (const thermalImg of measurement.thermalImages) {
+      const m1_img = thermalImg.m1Angle;
+      const m2_img = thermalImg.m2Angle;
+      
+      // Calculer les écarts angulaires
+      const delta_h = m1_lidar - m1_img; // Écart horizontal
+      const delta_v = a_lidar - m2_img;  // Écart vertical
+      
+      // Vérifier si le point est dans le champ de vision
+      if (Math.abs(delta_h) <= (FOV_H / 2) && Math.abs(delta_v) <= (FOV_V / 2)) {
+        // Calculer les coordonnées du pixel dans l'image
+        const col = Math.floor((delta_h + (FOV_H / 2)) / DX);
+        const row = Math.floor((delta_v + (FOV_V / 2)) / DY);
+        
+        // Vérifier que les coordonnées sont valides
+        if (col >= 0 && col < RES_X && row >= 0 && row < RES_Y) {
+          // Récupérer la température du pixel
+          if (thermalImg.matrix && 
+              Array.isArray(thermalImg.matrix) && 
+              thermalImg.matrix[row] && 
+              thermalImg.matrix[row][col] !== undefined) {
+            const temp = thermalImg.matrix[row][col];
+            if (!isNaN(temp) && temp !== null) {
+              temperatures.push(temp);
+            }
+          }
+        }
+      }
+    }
+    
+    // Si au moins une température a été trouvée, calculer la moyenne
+    if (temperatures.length > 0) {
+      const avgTemp = temperatures.reduce((a, b) => a + b, 0) / temperatures.length;
+      point.temperature = avgTemp;
+      pointsWithTemp++;
+    }
+  }
+  
+  // Marquer la fusion comme terminée
+  if (!measurement.thermalFusion) {
+    measurement.thermalFusion = {};
+  }
+  measurement.thermalFusion.fusionCompleted = true;
+  
+  console.log(`✅ Fusion: ${pointsWithTemp}/${measurement.points.length} points ont une température (${(pointsWithTemp/measurement.points.length*100).toFixed(1)}%)`);
 }
 
 /**
@@ -140,6 +235,84 @@ export function initSocketServer(httpServer, corsOptions) {
       socket.formId = formId;
       
       socket.emit("connected", { ok: true, userId: resolvedUserId.toString() });
+    });
+
+    // Réception des images thermiques du robot
+    socket.on("thermal:image", async (data) => {
+      try {
+        const { measurementId, userId, formId, robotIp, imageData, m1Angle, m2Angle } = data;
+        
+        if (!userId) {
+          socket.emit("error", { message: "userId requis" });
+          return;
+        }
+
+        const resolvedUserId = await resolveUserId(userId);
+        if (!resolvedUserId) {
+          socket.emit("error", { 
+            message: `Utilisateur non trouvé: ${userId}` 
+          });
+          return;
+        }
+
+        let measurement;
+        
+        if (measurementId) {
+          measurement = await LidarMeasurement.findOne({
+            _id: measurementId,
+            userId: resolvedUserId,
+            status: { $in: ['collecting', 'completed'] }
+          });
+        } else {
+          // Chercher la dernière mesure en cours
+          measurement = await LidarMeasurement.findOne({
+            userId: resolvedUserId,
+            status: { $in: ['collecting', 'completed'] }
+          }).sort({ createdAt: -1 });
+        }
+        
+        if (!measurement) {
+          socket.emit("error", { message: "Aucune mesure trouvée pour cette image thermique" });
+          return;
+        }
+        
+        // Initialiser les paramètres de fusion si nécessaire
+        if (!measurement.thermalFusion) {
+          measurement.thermalFusion = {
+            fovHorizontal: 44.0,
+            fovVertical: 35.0,
+            resolutionX: 80,
+            resolutionY: 62,
+            fusionCompleted: false
+          };
+        }
+        
+        // Ajouter l'image thermique
+        if (!measurement.thermalImages) {
+          measurement.thermalImages = [];
+        }
+        
+        measurement.thermalImages.push({
+          matrix: imageData, // Matrice 80x62 de températures
+          m1Angle: m1Angle || 0,
+          m2Angle: m2Angle || 0,
+          timestamp: new Date()
+        });
+        
+        await measurement.save();
+        
+        console.log(`📸 Image thermique reçue: M1=${m1Angle}°, M2=${m2Angle}° pour mesure ${measurement._id}`);
+        
+        socket.emit("thermal:ack", {
+          ok: true,
+          measurementId: measurement._id.toString(),
+          imageCount: measurement.thermalImages.length
+        });
+        
+      } catch (error) {
+        console.error("Erreur lors du traitement de l'image thermique:", error);
+        socket.emit("error", { message: "Erreur serveur lors du traitement de l'image thermique" });
+      }
     });
 
     // Réception des données LiDAR du robot
@@ -231,6 +404,15 @@ export function initSocketServer(httpServer, corsOptions) {
         if (isLast) {
           measurement.stats = calculateStats(measurement.points);
           measurement.status = 'completed';
+          
+          // Si des images thermiques sont disponibles, effectuer la fusion
+          if (measurement.thermalImages && measurement.thermalImages.length > 0) {
+            console.log(`🔄 Fusion thermique en cours: ${measurement.thermalImages.length} images pour ${measurement.points.length} points...`);
+            await performThermalFusion(measurement);
+            measurement.stats = calculateStats(measurement.points); // Recalculer avec températures
+            console.log(`✅ Fusion thermique terminée`);
+          }
+          
           console.log(`✅ Mesure LIDAR finalisée: ${measurement.totalPoints} points pour userId ${resolvedUserId} (${userId})`);
         }
         

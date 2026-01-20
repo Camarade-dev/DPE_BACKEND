@@ -19,8 +19,26 @@ const LidarMeasurementSchema = new Schema({
     intensity: Number, // Intensité du signal
     angle: Number,     // Angle LIDAR (degrés)
     distance: Number,   // Distance brute (mm)
-    motorAngle: Number // Angle du moteur (degrés)
+    motorAngle: Number, // Angle du moteur M1 (degrés)
+    temperature: Number // Température (°C) - optionnel, ajouté par fusion thermique
   }],
+  
+  // Images thermiques reçues (pour fusion)
+  thermalImages: [{
+    matrix: [[Number]], // Matrice de températures (80x62 pour MI48)
+    m1Angle: Number,    // Angle moteur M1 au moment de la capture
+    m2Angle: Number,   // Angle moteur M2 au moment de la capture
+    timestamp: Date    // Timestamp de la capture
+  }],
+  
+  // Paramètres de fusion thermique
+  thermalFusion: {
+    fovHorizontal: Number,  // FOV horizontal (44° pour MI48)
+    fovVertical: Number,    // FOV vertical (35° pour MI48)
+    resolutionX: Number,    // Résolution X (80 pour MI48)
+    resolutionY: Number,   // Résolution Y (62 pour MI48)
+    fusionCompleted: Boolean // Indique si la fusion a été effectuée
+  },
   
   // Statistiques calculées
   stats: {
@@ -31,7 +49,10 @@ const LidarMeasurementSchema = new Schema({
     minZ: Number,
     maxZ: Number,
     avgIntensity: Number,
-    pointDensity: Number
+    pointDensity: Number,
+    minTemperature: Number,  // Température minimale (°C)
+    maxTemperature: Number,  // Température maximale (°C)
+    avgTemperature: Number   // Température moyenne (°C)
   },
   
   // Statut
