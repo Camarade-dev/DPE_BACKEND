@@ -409,14 +409,64 @@ router.get("/:id/download-rag-pdf", async (req, res) => {
     
     console.log(`📥 Téléchargement du PDF depuis: ${pdfUrl}`);
     
-    try {
-      const pdfResponse = await fetch(pdfUrl);
-      if (!pdfResponse.ok) {
-        throw new Error(`Erreur HTTP ${pdfResponse.status}: ${await pdfResponse.text()}`);
+    // Fonction helper pour télécharger le PDF avec retry (pour gérer les cold starts Render)
+    const downloadPDFWithRetry = async (retries = 2) => {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          if (attempt > 0) {
+            const delay = Math.min(2000 * attempt, 10000); // 2s, 4s, max 10s
+            console.log(`🔄 Tentative ${attempt + 1}/${retries + 1} après ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+          
+          console.log(`📡 Tentative ${attempt + 1}/${retries + 1} de téléchargement du PDF...`);
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 secondes timeout
+          
+          try {
+            const pdfResponse = await fetch(pdfUrl, {
+              signal: controller.signal,
+              headers: {
+                'Accept': 'application/pdf'
+              }
+            });
+            clearTimeout(timeoutId);
+            
+            if (!pdfResponse.ok) {
+              const errorText = await pdfResponse.text();
+              console.error(`❌ Erreur HTTP ${pdfResponse.status}: ${errorText.substring(0, 200)}`);
+              
+              // Si c'est une erreur 502 (Bad Gateway), c'est probablement un cold start Render
+              if (pdfResponse.status === 502 && attempt < retries) {
+                console.log("⚠️ Erreur 502 (Bad Gateway) - probable cold start Render, nouvelle tentative...");
+                continue; // Réessayer
+              }
+              
+              throw new Error(`Erreur HTTP ${pdfResponse.status}: ${errorText.substring(0, 200)}`);
+            }
+            
+            // Récupérer le PDF en tant que buffer
+            const pdfBuffer = await pdfResponse.arrayBuffer();
+            console.log(`✅ PDF téléchargé avec succès (${pdfBuffer.byteLength} octets)`);
+            return pdfBuffer;
+          } catch (fetchError) {
+            clearTimeout(timeoutId);
+            if (fetchError.name === 'AbortError') {
+              throw new Error('Timeout lors du téléchargement du PDF (60 secondes dépassées)');
+            }
+            throw fetchError;
+          }
+        } catch (error) {
+          if (attempt === retries) {
+            throw error; // Dernière tentative, propager l'erreur
+          }
+          console.warn(`⚠️ Tentative ${attempt + 1} échouée:`, error.message);
+        }
       }
-      
-      // Récupérer le PDF en tant que buffer
-      const pdfBuffer = await pdfResponse.arrayBuffer();
+    };
+    
+    try {
+      const pdfBuffer = await downloadPDFWithRetry(2);
       
       // Transférer le PDF au client
       res.setHeader('Content-Type', 'application/pdf');
@@ -424,7 +474,16 @@ router.get("/:id/download-rag-pdf", async (req, res) => {
       res.send(Buffer.from(pdfBuffer));
     } catch (fetchError) {
       console.error("❌ Erreur lors du téléchargement du PDF:", fetchError);
-      res.status(500).json({ ok:false, error:`Impossible de télécharger le PDF: ${fetchError.message}` });
+      
+      // Message d'erreur plus explicite selon le type d'erreur
+      let errorMessage = `Impossible de télécharger le PDF: ${fetchError.message}`;
+      if (fetchError.message.includes('502') || fetchError.message.includes('Bad Gateway')) {
+        errorMessage = `L'API RAG est temporairement indisponible (cold start Render). Veuillez réessayer dans quelques instants.`;
+      } else if (fetchError.message.includes('Timeout') || fetchError.message.includes('timeout')) {
+        errorMessage = `Le téléchargement du PDF a pris trop de temps. L'API RAG est peut-être en cours de démarrage. Veuillez réessayer.`;
+      }
+      
+      res.status(500).json({ ok:false, error: errorMessage });
     }
   } catch (error) {
     console.error("Erreur download-rag-pdf:", error);
