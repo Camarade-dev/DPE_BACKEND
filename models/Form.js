@@ -79,7 +79,9 @@ const FormSchema = new Schema({
   ragSources: [{
     file_name: String,
     page: String,
-    score: Number
+    page_label: String, // Alias pour page
+    score: Number,
+    download_url: String // URL pour télécharger le document source
   }],
   ragPdfFilename: { type: String }, // Nom du fichier PDF généré
   ragGenerated: { type: Boolean, default: false },
