@@ -81,6 +81,7 @@ const FormSchema = new Schema({
     page: String,
     score: Number
   }],
+  ragPdfFilename: { type: String }, // Nom du fichier PDF généré
   ragGenerated: { type: Boolean, default: false },
   ragGeneratedAt: Date,
   dpeResultsHash: { type: String, index: true } // Hash des résultats DPE pour le cache RAG

@@ -146,6 +146,11 @@ Donne-moi des conseils concrets et personnalisés.`;
       if (ragResult.data.sources && Array.isArray(ragResult.data.sources)) {
         form.ragSources = ragResult.data.sources;
       }
+      // Sauvegarder le nom du fichier PDF si disponible
+      if (ragResult.data.pdf_filename) {
+        form.ragPdfFilename = ragResult.data.pdf_filename;
+        console.log("✅ Nom du PDF sauvegardé:", ragResult.data.pdf_filename);
+      }
       form.ragGenerated = true;
       form.ragGeneratedAt = new Date();
       form.dpeResultsHash = dpeResultsHash;
@@ -372,6 +377,7 @@ router.post("/:id/generate-rag", async (req, res) => {
       data:{
         ragResponse: updatedForm.ragResponse,
         ragSources: updatedForm.ragSources || [],
+        ragPdfFilename: updatedForm.ragPdfFilename,
         ragGenerated: updatedForm.ragGenerated,
         ragGeneratedAt: updatedForm.ragGeneratedAt
       },
@@ -380,6 +386,44 @@ router.post("/:id/generate-rag", async (req, res) => {
   } catch (error) {
     console.error("Erreur generate-rag:", error);
     res.status(500).json({ ok:false, error:"Erreur serveur lors de la génération RAG" });
+  }
+});
+
+router.get("/:id/download-rag-pdf", async (req, res) => {
+  try {
+    const form = await Form.findOne({ _id: req.params.id, userId: req.user.id });
+    if (!form) return res.status(404).json({ ok:false, error:"Formulaire non trouvé" });
+
+    if (!form.ragPdfFilename) {
+      return res.status(404).json({ ok:false, error:"PDF non généré pour ce formulaire" });
+    }
+
+    // Récupérer le PDF depuis l'API RAG
+    const ragApiUrl = process.env.RAG_API_URL || "https://rag-dpe-1.onrender.com";
+    const pdfUrl = `${ragApiUrl}/pdf/${form.ragPdfFilename}`;
+    
+    console.log(`📥 Téléchargement du PDF depuis: ${pdfUrl}`);
+    
+    try {
+      const pdfResponse = await fetch(pdfUrl);
+      if (!pdfResponse.ok) {
+        throw new Error(`Erreur HTTP ${pdfResponse.status}: ${await pdfResponse.text()}`);
+      }
+      
+      // Récupérer le PDF en tant que buffer
+      const pdfBuffer = await pdfResponse.arrayBuffer();
+      
+      // Transférer le PDF au client
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${form.ragPdfFilename}"`);
+      res.send(Buffer.from(pdfBuffer));
+    } catch (fetchError) {
+      console.error("❌ Erreur lors du téléchargement du PDF:", fetchError);
+      res.status(500).json({ ok:false, error:`Impossible de télécharger le PDF: ${fetchError.message}` });
+    }
+  } catch (error) {
+    console.error("Erreur download-rag-pdf:", error);
+    res.status(500).json({ ok:false, error:"Erreur serveur lors du téléchargement du PDF" });
   }
 });
 
