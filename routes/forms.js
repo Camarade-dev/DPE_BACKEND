@@ -34,42 +34,15 @@ function hashDPEResults(dpeResults) {
 
 /** 
  * Génère une réponse RAG automatique basée sur les résultats du DPE
+ * Toujours génère une nouvelle réponse (pas de cache)
  */
 async function generateRAGResponse(form, userId) {
   if (!form.dpeResults || !form.dpeCalculated) {
     throw new Error("Le DPE doit être calculé avant de générer la RAG");
   }
 
-  // Générer le hash des résultats DPE pour le cache
-  const dpeResultsHash = hashDPEResults(form.dpeResults);
-  
-  // Vérifier si une RAG existe déjà pour ce userId avec les mêmes résultats DPE
-  const cachedForm = await Form.findOne({
-    userId: userId,
-    dpeResultsHash: dpeResultsHash,
-    ragGenerated: true,
-    ragResponse: { $exists: true, $ne: null, $ne: '' }
-  }).sort({ ragGeneratedAt: -1 }); // Prendre le plus récent
-
-  if (cachedForm && cachedForm.ragResponse) {
-    console.log("✅ RAG trouvée en cache pour userId:", userId);
-    // Copier la réponse RAG du cache
-    form.ragResponse = cachedForm.ragResponse;
-    form.ragSources = cachedForm.ragSources || [];
-    // IMPORTANT: Copier aussi ragPdfFilename si disponible dans le cache
-    if (cachedForm.ragPdfFilename) {
-      form.ragPdfFilename = cachedForm.ragPdfFilename;
-      console.log("✅ ragPdfFilename copié depuis le cache:", cachedForm.ragPdfFilename);
-    }
-    form.ragGenerated = true;
-    form.ragGeneratedAt = cachedForm.ragGeneratedAt || new Date();
-    form.dpeResultsHash = dpeResultsHash;
-    await form.save();
-    return true;
-  }
-
-  // Pas de cache, générer la RAG
-  console.log("🔄 Génération RAG nécessaire pour userId:", userId);
+  // Générer la RAG à chaque fois (pas de cache)
+  console.log("🔄 Génération RAG pour userId:", userId);
   const ragApiUrl = process.env.RAG_API_URL || "https://rag-dpe-1.onrender.com";
   
   // Vérifier si l'URL de l'API RAG est configurée
@@ -158,7 +131,6 @@ Donne-moi des conseils concrets et personnalisés.`;
       }
       form.ragGenerated = true;
       form.ragGeneratedAt = new Date();
-      form.dpeResultsHash = dpeResultsHash;
       await form.save();
       console.log("✅ Réponse RAG générée avec succès");
       return true;
@@ -355,8 +327,7 @@ router.post("/:id/generate-rag", async (req, res) => {
     console.log("Formulaire après RAG:", {
       ragGenerated: updatedForm.ragGenerated,
       hasRagResponse: !!updatedForm.ragResponse,
-      ragResponseLength: updatedForm.ragResponse?.length,
-      dpeResultsHash: updatedForm.dpeResultsHash
+      ragResponseLength: updatedForm.ragResponse?.length
     });
     
     if (!updatedForm.ragGenerated || !updatedForm.ragResponse) {
@@ -367,16 +338,6 @@ router.post("/:id/generate-rag", async (req, res) => {
       });
     }
     
-    // Vérifier si c'était du cache (si un autre formulaire avec le même hash existe)
-    const wasCached = updatedForm.dpeResultsHash && 
-                      await Form.exists({
-                        userId: req.user.id,
-                        dpeResultsHash: updatedForm.dpeResultsHash,
-                        _id: { $ne: updatedForm._id },
-                        ragGenerated: true,
-                        ragResponse: { $exists: true, $ne: null, $ne: '' }
-                      });
-    
     res.json({ 
       ok:true, 
       data:{
@@ -386,7 +347,7 @@ router.post("/:id/generate-rag", async (req, res) => {
         ragGenerated: updatedForm.ragGenerated,
         ragGeneratedAt: updatedForm.ragGeneratedAt
       },
-      cached: !!wasCached
+      cached: false
     });
   } catch (error) {
     console.error("Erreur generate-rag:", error);
