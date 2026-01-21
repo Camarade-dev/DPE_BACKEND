@@ -8,32 +8,87 @@ import User from "./models/User.js";
 // Fonctions utilitaires (réutilisées depuis lidar-public.js)
 function convertTo3DPoints(rawData) {
   const points = [];
-  const lines = rawData.split(";").filter(line => line.trim());
+  
+  if (!rawData || !rawData.trim()) {
+    return points;
+  }
+  
+  // Détecter le format: "angle_m1|angle1,dist1,inten1;angle2,dist2,inten2;..."
+  let motorAngle = 0; // Angle du moteur M1 (horizontal)
+  let dataToParse = rawData;
+  
+  if (rawData.includes("|")) {
+    const parts = rawData.split("|");
+    if (parts.length === 2) {
+      motorAngle = parseFloat(parts[0]);
+      dataToParse = parts[1];
+      
+      // Valider que motorAngle est un nombre valide
+      if (isNaN(motorAngle) || !isFinite(motorAngle)) {
+        console.warn("⚠️ Angle moteur invalide, utilisation de 0");
+        motorAngle = 0;
+      }
+    }
+  }
+  
+  const lines = dataToParse.split(";").filter(line => line.trim());
   
   for (const line of lines) {
     try {
-      const [angle, dist, inten, anglemot] = line.split(",").map(parseFloat);
+      const parts = line.split(",").map(s => {
+        const val = parseFloat(s.trim());
+        return isNaN(val) || !isFinite(val) ? null : val;
+      });
       
-      if (inten >= 0 && dist > 0 && dist < 12000) {
-        const angleRad = (angle * Math.PI) / 180;
-        const motorRad = (anglemot * Math.PI) / 180;
-        
-        const z = -dist * Math.sin(angleRad);
-        const y = dist * Math.cos(angleRad) * Math.sin(motorRad);
-        const x = dist * Math.cos(angleRad) * Math.cos(motorRad);
-        
-        points.push({
-          x: x / 1000, // Convertir mm en mètres
-          y: y / 1000,
-          z: z / 1000,
-          intensity: inten,
-          angle: angle,
-          distance: dist,
-          motorAngle: anglemot
-        });
+      // Format attendu: angle,dist,inten (3 valeurs)
+      // ou angle,dist,inten,anglemot (4 valeurs - format ancien)
+      let angle, dist, inten, anglemot;
+      
+      if (parts.length >= 3) {
+        angle = parts[0];
+        dist = parts[1];
+        inten = parts[2];
+        anglemot = parts.length >= 4 ? parts[3] : motorAngle; // Utiliser motorAngle si non fourni
+      } else {
+        continue; // Ignorer les lignes invalides
       }
+      
+      // Valider que toutes les valeurs sont des nombres valides
+      if (angle === null || dist === null || inten === null || anglemot === null) {
+        continue; // Ignorer les points avec valeurs invalides
+      }
+      
+      // Valider les contraintes
+      if (inten < 0 || dist <= 0 || dist >= 12000) {
+        continue; // Ignorer les points invalides
+      }
+      
+      // Calculer les coordonnées 3D
+      const angleRad = (angle * Math.PI) / 180;
+      const motorRad = (anglemot * Math.PI) / 180;
+      
+      const z = -dist * Math.sin(angleRad);
+      const y = dist * Math.cos(angleRad) * Math.sin(motorRad);
+      const x = dist * Math.cos(angleRad) * Math.cos(motorRad);
+      
+      // Vérifier que les calculs ont produit des nombres valides
+      if (isNaN(x) || isNaN(y) || isNaN(z) || !isFinite(x) || !isFinite(y) || !isFinite(z)) {
+        console.warn(`⚠️ Point invalide ignoré: angle=${angle}, dist=${dist}, anglemot=${anglemot}`);
+        continue;
+      }
+      
+      points.push({
+        x: x / 1000, // Convertir mm en mètres
+        y: y / 1000,
+        z: z / 1000,
+        intensity: inten,
+        angle: angle,
+        distance: dist,
+        motorAngle: anglemot
+      });
     } catch (err) {
       console.error("Erreur parsing point:", line, err);
+      continue; // Ignorer ce point et continuer
     }
   }
   
